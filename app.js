@@ -17,6 +17,13 @@ import {
   query,
   orderBy
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+import {
+  getAuth,
+  signInWithPopup,
+  GoogleAuthProvider,
+  signOut,
+  onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 
 // Firebase 설정
 const firebaseConfig = {
@@ -29,10 +36,14 @@ const firebaseConfig = {
   measurementId: "G-YNCT74MKJE"
 };
 
-// Firebase 초기화 및 Firestore 연결
+// Firebase 초기화 및 Firestore/Auth 연결
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const memosCol = collection(db, "memos");
+
+const auth = getAuth(app);
+const provider = new GoogleAuthProvider();
+let currentUser = null; // 현재 로그인한 사용자 정보
 
 
 // ===================================================
@@ -58,9 +69,15 @@ async function loadMemos() {
 // 메모를 새로 씁니다.
 // 백엔드 2: 여기에 "누가 썼는지"(uid)를 함께 저장하게 됩니다.
 async function addMemo(text) {
+  if (!currentUser) {
+    alert("로그인 후 메모를 작성할 수 있습니다.");
+    return;
+  }
   await addDoc(memosCol, {
     text: text,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    uid: currentUser.uid,
+    author: currentUser.displayName || "작성자"
   });
 }
 
@@ -90,20 +107,86 @@ function makeMemo(memo) {
   const div = document.createElement("div");
   div.className = "memo";
 
-  const del = document.createElement("button");
-  del.textContent = "×";
-  del.addEventListener("click", async function () {
-    await deleteMemo(memo.id);
-    await render();
-  });
-  div.appendChild(del);
+  // 본인이 작성한 메모이거나, uid 정보가 없는 기존 메모인 경우에만 삭제(×) 버튼 표시
+  const canDelete = !memo.uid || (currentUser && currentUser.uid === memo.uid);
+  if (canDelete) {
+    const del = document.createElement("button");
+    del.textContent = "×";
+    del.addEventListener("click", async function () {
+      await deleteMemo(memo.id);
+      await render();
+    });
+    div.appendChild(del);
+  }
 
   const span = document.createElement("span");
   span.textContent = memo.text;
   div.appendChild(span);
 
+  // 작성자 정보가 있으면 표시
+  if (memo.author) {
+    const authorDiv = document.createElement("div");
+    authorDiv.className = "memo-author";
+    authorDiv.textContent = memo.author;
+    div.appendChild(authorDiv);
+  }
+
   return div;
 }
+
+
+// ===================================================
+// 로그인 기능 (Firebase Authentication - Google)
+// ===================================================
+
+const userArea = document.getElementById("userArea");
+
+// Google 로그인 창 열기
+async function login() {
+  try {
+    await signInWithPopup(auth, provider);
+  } catch (error) {
+    console.error("로그인 실패:", error);
+    alert("로그인에 실패했습니다: " + error.message);
+  }
+}
+
+// 로그아웃
+async function logout() {
+  try {
+    await signOut(auth);
+  } catch (error) {
+    console.error("로그아웃 실패:", error);
+  }
+}
+
+// 상단 로그인 영역 그리기
+function renderUserArea(user) {
+  userArea.innerHTML = "";
+
+  if (user) {
+    const info = document.createElement("span");
+    info.textContent = `${user.displayName || "사용자"}님 환영합니다!`;
+    userArea.appendChild(info);
+
+    const logoutBtn = document.createElement("button");
+    logoutBtn.textContent = "로그아웃";
+    logoutBtn.addEventListener("click", logout);
+    userArea.appendChild(logoutBtn);
+  } else {
+    const loginBtn = document.createElement("button");
+    loginBtn.textContent = "Google로 로그인";
+    loginBtn.addEventListener("click", login);
+    userArea.appendChild(loginBtn);
+  }
+}
+
+// 로그인 상태 변경 감지 (초기 로드 및 로그인/로그아웃 시 자동 실행)
+onAuthStateChanged(auth, function (user) {
+  currentUser = user;
+  renderUserArea(user);
+  render(); // 로그인 상태가 바뀌면 본인 메모 삭제 버튼 노출 여부 다시 그리기
+});
 
 
 // ===================================================
@@ -119,6 +202,11 @@ input.addEventListener("keydown", async function (e) {
 
     const text = input.value.trim();
     if (text === "") return;
+
+    if (!currentUser) {
+      alert("로그인 후 메모를 작성할 수 있습니다.");
+      return;
+    }
 
     input.value = "";
     await addMemo(text);
